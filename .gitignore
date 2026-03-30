@@ -3,5 +3,7 @@ __pycache__/
 *.pyc
 *.log
 .env
+.env.*
+!.env.example
 authorized_user.json
 client_secret.json

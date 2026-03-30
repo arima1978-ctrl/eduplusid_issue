@@ -8,18 +8,22 @@ import re
 import time
 import random
 import string
+import os
 
+from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import Select
+
+load_dotenv()
 
 LOGIN_URL = 'https://www.eduplus.jp/eduplus/idreg/master/master_login.aspx'
 REGISTER_URL = 'https://www.eduplus.jp/eduplus/idreg/master/juku_register.aspx'
 APPLY_LIST_URL = 'https://www.eduplus.jp/eduplus/idreg/master/apply_list.aspx'
 APPLY_STATE_URL = 'https://www.eduplus.jp/eduplus/idreg/master/apply_state_new.aspx'
 
-MASTER_ID = 'master1'
-MASTER_PW = 'kanrisha1650'
+MASTER_ID = os.environ.get('EDUPLUS_MASTER_ID', 'master1')
+MASTER_PW = os.environ['EDUPLUS_MASTER_PW']
 
 
 def create_driver():

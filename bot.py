@@ -10,6 +10,9 @@ import re
 import os
 import sys
 import threading
+from dotenv import load_dotenv
+
+load_dotenv()
 
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
@@ -19,8 +22,8 @@ if sys.platform == 'win32':
 # 設定
 # ====================================
 CONFIG = {
-    'TELEGRAM_BOT_TOKEN': '8747647853:AAGdZh8StRFPie6Q9fUsLCecojSCqhMgpho',
-    'GAS_URL': 'https://script.google.com/macros/s/AKfycbyW7HZZtuQZ08TP0oktq4WX4Y9y3r8pmmGKfmE9-cKrGGO9bzNXoto0RMBH6WpqB3W7/exec',
+    'TELEGRAM_BOT_TOKEN': os.environ['TELEGRAM_BOT_TOKEN'],
+    'GAS_URL': os.environ['GAS_URL'],
 }
 
 # 対話型セッション管理（chat_id → セッション情報）
