@@ -2,3 +2,4 @@ requests
 selenium
 pykakasi
 python-dotenv
+beautifulsoup4
