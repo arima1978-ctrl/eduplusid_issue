@@ -7,5 +7,7 @@ __pycache__/
 !.env.example
 authorized_user.json
 client_secret.json
+credentials.json
+token.json
 *.png
 *.log

@@ -116,20 +116,10 @@ http://www.eduplus.website/eduplus/2021teacher_manual.pdf
 
 
 def send_email_via_gas(to_email, juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person):
+    from gmail_sender import send_email
     body = build_email_body(juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person)
-    result = gas_api({
-        'action': 'send_email',
-        'to_email': to_email,
-        'juku_name': juku_name,
-        'subject': f'eduplus+ 管理者ID・体験用IDのご連絡【{juku_name}】',
-        'body': body,
-        'admin_id': admin_id,
-        'admin_pw': admin_pw,
-        'sample_id': sample_id,
-        'sample_pw': sample_pw,
-        'sales_person': sales_person,
-    })
-    return result.get('success', False)
+    subject = f'eduplus+ 管理者ID・体験用IDのご連絡【{juku_name}】'
+    return send_email(to_email, subject, body)
 
 def save_to_drive_via_gas(file_url, file_name):
     result = gas_api({
