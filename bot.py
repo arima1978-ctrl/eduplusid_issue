@@ -76,11 +76,53 @@ def get_row_data(row_num):
 def update_cell(row_num, col_num, value):
     gas_api({'action': 'update_cell', 'row_num': row_num, 'col_num': col_num, 'value': value})
 
+def build_email_body(juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person):
+    return f"""{juku_name}御中
+
+お世話になります。
+名大ＳＫＹ未来教育事業部です。
+
+早速ですが、eduplus+の管理者ＩＤと体験用ＩＤをご連絡させていただきます。
+
+マニュアルをご覧いただきご不明な箇所等ございましたら、
+担当者までお問い合せください。
+
+
+■ログインＵＲＬ
+
+https://www.eduplus.jp/eduplus/
+
+
+  【管理者ID】{admin_id}
+
+   【パスワード】  {admin_pw}
+
+　【サンプルID】{sample_id}
+
+   【パスワード】{sample_pw}
+
+
+下記より書類をダウンロードしてご確認ください。
+
+◆2026年度営業日カレンダー
+https://www.eduplus.website/eduplus/2026_eigyo.pdf
+
+◆生徒用マニュアル
+http://www.eduplus.website/eduplus/2021student_manual.pdf
+
+◆講師用マニュアル
+http://www.eduplus.website/eduplus/2021teacher_manual.pdf
+"""
+
+
 def send_email_via_gas(to_email, juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person):
+    body = build_email_body(juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person)
     result = gas_api({
         'action': 'send_email',
         'to_email': to_email,
         'juku_name': juku_name,
+        'subject': f'eduplus+ 管理者ID・体験用IDのご連絡【{juku_name}】',
+        'body': body,
         'admin_id': admin_id,
         'admin_pw': admin_pw,
         'sample_id': sample_id,
