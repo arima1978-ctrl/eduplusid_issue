@@ -15,6 +15,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TOKEN_PATH = os.path.join(SCRIPT_DIR, "token.json")
 CREDENTIALS_PATH = os.path.join(SCRIPT_DIR, "credentials.json")
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
+SENDER_EMAIL = os.environ.get("GMAIL_SENDER", "名大ＳＫＹ未来教育事業部 <eduplus@meidaisky.jp>")
 
 
 def _get_gmail_service():
@@ -41,6 +42,7 @@ def send_email(to_email: str, subject: str, body: str) -> tuple[bool, str]:
     try:
         service = _get_gmail_service()
         message = MIMEText(body, "plain", "utf-8")
+        message["from"] = SENDER_EMAIL
         message["to"] = to_email
         message["subject"] = subject
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
