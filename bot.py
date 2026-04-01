@@ -3,6 +3,8 @@ eduplus 塾登録 Telegram Bot（Python + GAS API版）
 """
 
 import json
+import logging
+import logging.handlers
 import time
 import requests
 from datetime import datetime
@@ -17,6 +19,38 @@ load_dotenv(override=True)
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
+
+# ====================================
+# ログ設定
+# ====================================
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_DIR = os.path.join(SCRIPT_DIR, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+logger = logging.getLogger("eduplusbot")
+logger.setLevel(logging.DEBUG)
+
+# ファイルハンドラ（日次ローテーション、30日保持）
+file_handler = logging.handlers.TimedRotatingFileHandler(
+    os.path.join(LOG_DIR, "bot.log"),
+    when="midnight",
+    backupCount=30,
+    encoding="utf-8",
+)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+))
+
+# コンソールハンドラ
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(message)s"
+))
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 # ====================================
 # 設定
@@ -119,7 +153,11 @@ def send_email_via_gas(to_email, juku_name, admin_id, admin_pw, sample_id, sampl
     from gmail_sender import send_email
     body = build_email_body(juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person)
     subject = f'eduplus+ 管理者ID・体験用IDのご連絡【{juku_name}】'
-    return send_email(to_email, subject, body)
+    logger.info("メール送信開始: to=%s, 塾名=%s", to_email, juku_name)
+    success, error_msg = send_email(to_email, subject, body)
+    if not success:
+        logger.error("メール送信失敗: to=%s, 塾名=%s, error=%s", to_email, juku_name, error_msg)
+    return success, error_msg
 
 def save_to_drive_via_gas(file_url, file_name):
     result = gas_api({
@@ -185,10 +223,12 @@ def handle_message(update):
     if sender.get('is_bot', False):
         return
 
-    # デバッグ: メッセージ種類をログ
+    # メッセージ受信ログ
     has_photo = 'photo' in message
     has_text = bool(message.get('text'))
-    print(f"受信: chat={chat_id}, from={sender.get('first_name','?')}, photo={has_photo}, text={has_text}, text_val={text[:30] if text else ''}", flush=True)
+    logger.info("受信: chat=%s, from=%s, photo=%s, text=%s, text_val=%s",
+                chat_id, sender.get('first_name', '?'), has_photo, has_text,
+                text[:30] if text else '')
 
     if 'photo' in message:
         handle_photo(message, chat_id)
@@ -578,9 +618,9 @@ def ask_next_field(chat_id):
             msg += f"スキップする場合は「skip」"
 
         send_message(chat_id, msg)
-        print(f"質問送信: step={step}, field={field_key}, value={current_value[:30] if current_value else 'なし'}")
+        logger.debug("質問送信: step=%s, field=%s, value=%s", step, field_key, current_value[:30] if current_value else 'なし')
     except Exception as e:
-        print(f"ask_next_field エラー: step={step if 'step' in dir() else '?'}, error={e}")
+        logger.error("ask_next_field エラー: step=%s, error=%s", step if 'step' in dir() else '?', e, exc_info=True)
         import traceback
         traceback.print_exc()
 
@@ -618,7 +658,7 @@ def handle_session_reply(chat_id, text):
         session['step'] += 1
         ask_next_field(chat_id)
     except Exception as e:
-        print(f"セッション返信エラー: step={step}, field={field_key}, error={e}")
+        logger.error("セッション返信エラー: step=%s, field=%s, error=%s", step, field_key, e, exc_info=True)
         send_message(chat_id, f"❌ エラーが発生しました: {str(e)}")
 
 
@@ -653,7 +693,9 @@ def finalize_session(chat_id):
     # スプレッドシートに書き込み
     try:
         row = write_to_spreadsheet(data)
+        logger.info("スプレッドシート書き込み完了: row=%s, 塾名=%s", row, juku_name)
     except Exception as e:
+        logger.error("スプレッドシート書き込み失敗: 塾名=%s, error=%s", juku_name, e, exc_info=True)
         send_message(chat_id, f"❌ スプレッドシート書き込み失敗: {str(e)}")
         return
 
@@ -693,6 +735,7 @@ def finalize_session(chat_id):
             else:
                 generate_error_with_candidates(chat_id, row, juku_id, juku_name, result)
         except Exception as e:
+            logger.error("ID発行エラー: 塾ID=%s, 塾名=%s, error=%s", juku_id, juku_name, e, exc_info=True)
             send_message(chat_id, f"❌ ID発行エラー: {str(e)}")
 
     thread = threading.Thread(target=do_issue)
@@ -747,12 +790,12 @@ def handle_mail_session_reply(chat_id, text):
             send_message(chat_id, "⚠️ 管理者IDが未設定です。")
             return
 
-        result = send_email_via_gas(email, juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person)
-        if result:
+        success, error_msg = send_email_via_gas(email, juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person)
+        if success:
             update_cell(row_num, 15, '送信済')
             send_message(chat_id, f"✅ {juku_name}（{email}）へメールを送信しました。")
         else:
-            send_message(chat_id, "❌ メール送信に失敗しました。")
+            send_message(chat_id, f"❌ メール送信に失敗しました。\n原因: {error_msg}")
 
         del SESSIONS[chat_id]
         return
@@ -844,6 +887,7 @@ def handle_registration(text, chat_id):
                 else:
                     generate_error_with_candidates(chat_id, row, juku_id, data['塾名'], result)
             except Exception as e:
+                logger.error("ID発行エラー(写真): 塾ID=%s, error=%s", juku_id, e, exc_info=True)
                 send_message(chat_id, f"❌ ID発行エラー: {str(e)}")
 
         thread = threading.Thread(target=do_issue)
@@ -883,12 +927,12 @@ def handle_approve(text, chat_id):
         return
 
     if len(parts) > 2 and parts[2] == 'yes':
-        result = send_email_via_gas(email, juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person)
-        if result:
+        success, error_msg = send_email_via_gas(email, juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person)
+        if success:
             update_cell(row_num, 15, '送信済')
             send_message(chat_id, f"✅ {juku_name}（{email}）へメールを送信しました。")
         else:
-            send_message(chat_id, "❌ メール送信に失敗しました。")
+            send_message(chat_id, f"❌ メール送信に失敗しました。\n原因: {error_msg}")
     else:
         msg = (
             f"📧 メール送信確認\n\n"
@@ -956,6 +1000,7 @@ def handle_issue(text, chat_id):
             else:
                 send_message(chat_id, f"❌ {juku_name}のeduplus登録に失敗しました。塾IDが重複しているか確認してください。")
         except Exception as e:
+            logger.error("ID発行エラー(issue): error=%s", e, exc_info=True)
             send_message(chat_id, f"❌ ID発行エラー: {str(e)}")
 
     # バックグラウンドで実行（ブラウザ操作に時間がかかるため）
@@ -1010,6 +1055,7 @@ def handle_retry_name(text, chat_id):
             else:
                 generate_error_with_candidates(chat_id, row_num, juku_id, new_name, result)
         except Exception as e:
+            logger.error("ID発行エラー(retry_name): error=%s", e, exc_info=True)
             send_message(chat_id, f"❌ ID発行エラー: {str(e)}")
 
     thread = threading.Thread(target=do_retry_name)
@@ -1069,6 +1115,7 @@ def handle_retry(text, chat_id):
             else:
                 generate_error_with_candidates(chat_id, row_num, juku_id, juku_name, result)
         except Exception as e:
+            logger.error("ID発行エラー(retry): error=%s", e, exc_info=True)
             send_message(chat_id, f"❌ ID発行エラー: {str(e)}")
 
     thread = threading.Thread(target=do_retry)
@@ -1101,14 +1148,14 @@ def handle_mail_change(text, chat_id):
 # メインループ
 # ====================================
 def main():
-    print("🤖 eduplus塾登録Bot 起動...")
+    logger.info("eduplus塾登録Bot 起動...")
 
     token = CONFIG['TELEGRAM_BOT_TOKEN']
     requests.get(f"https://api.telegram.org/bot{token}/deleteWebhook")
-    print("✅ Webhook削除完了")
+    logger.info("Webhook削除完了")
 
     offset = None
-    print(f"✅ ポーリング開始 token={CONFIG['TELEGRAM_BOT_TOKEN'][:15]}", flush=True)
+    logger.info("ポーリング開始 token=%s...", CONFIG['TELEGRAM_BOT_TOKEN'][:15])
 
     while True:
         try:
@@ -1119,13 +1166,13 @@ def main():
                     try:
                         handle_message(update)
                     except Exception as e:
-                        print(f"メッセージ処理エラー: {e}")
+                        logger.error("メッセージ処理エラー: %s", e, exc_info=True)
                     offset = update['update_id'] + 1
 
         except requests.exceptions.Timeout:
             continue
         except Exception as e:
-            print(f"ポーリングエラー: {e}")
+            logger.error("ポーリングエラー: %s", e, exc_info=True)
             time.sleep(5)
 
 if __name__ == '__main__':

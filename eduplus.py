@@ -3,6 +3,7 @@ eduplus管理画面の自動操作モジュール
 - 新規塾登録
 - ID/パスワード取得
 """
+import logging
 import sys
 import re
 import time
@@ -11,6 +12,8 @@ import string
 import os
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import Select
@@ -168,7 +171,7 @@ def register_juku(juku_id, juku_name):
         return None
 
     except Exception as e:
-        print(f"eduplus登録エラー: {e}")
+        logger.error("eduplus登録エラー: %s", e, exc_info=True)
         return None
     finally:
         driver.quit()

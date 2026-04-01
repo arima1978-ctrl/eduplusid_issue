@@ -11,3 +11,4 @@ credentials.json
 token.json
 *.png
 *.log
+logs/
