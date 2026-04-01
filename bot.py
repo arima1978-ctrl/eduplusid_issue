@@ -8,6 +8,7 @@ import logging.handlers
 import time
 import requests
 from datetime import datetime
+from collections import deque
 import re
 import os
 import sys
@@ -62,6 +63,9 @@ CONFIG = {
 
 # 対話型セッション管理（chat_id → セッション情報）
 SESSIONS = {}
+
+# 処理済み update_id を保持（同一プロセス内での重複防止）
+PROCESSED_UPDATES = deque(maxlen=1000)
 
 # 確認する項目の順番
 CONFIRM_FIELDS = [
@@ -1200,9 +1204,30 @@ def handle_mail_change(text, chat_id):
     send_message(chat_id, f"✅ {juku_name}の送信先を変更しました。\n新しい送信先: {new_email}\n\n/approve {row_num} → メール送信を承認")
 
 # ====================================
+# 多重起動防止
+# ====================================
+def acquire_lock():
+    """ファイルロックで多重起動を防止。ロック取得できなければ終了。"""
+    lock_path = os.path.join(SCRIPT_DIR, ".bot.lock")
+    lock_file = open(lock_path, 'w')
+    try:
+        if sys.platform == 'win32':
+            import msvcrt
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError):
+        logger.error("別のbot.pyプロセスが既に実行中です。終了します。")
+        sys.exit(1)
+    # lock_file を返して参照を保持（GCでクローズされないように）
+    return lock_file
+
+# ====================================
 # メインループ
 # ====================================
 def main():
+    lock_file = acquire_lock()
     logger.info("eduplus塾登録Bot 起動...")
 
     token = CONFIG['TELEGRAM_BOT_TOKEN']
@@ -1218,11 +1243,21 @@ def main():
 
             if updates.get('ok') and updates['result']:
                 for update in updates['result']:
+                    update_id = update['update_id']
+
+                    # 重複処理を防止
+                    if update_id in PROCESSED_UPDATES:
+                        logger.debug("スキップ（処理済み）: update_id=%s", update_id)
+                        offset = update_id + 1
+                        continue
+
+                    PROCESSED_UPDATES.append(update_id)
+
                     try:
                         handle_message(update)
                     except Exception as e:
                         logger.error("メッセージ処理エラー: %s", e, exc_info=True)
-                    offset = update['update_id'] + 1
+                    offset = update_id + 1
 
         except requests.exceptions.Timeout:
             continue
