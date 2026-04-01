@@ -12,7 +12,7 @@ import sys
 import threading
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
@@ -188,7 +188,7 @@ def handle_message(update):
     # デバッグ: メッセージ種類をログ
     has_photo = 'photo' in message
     has_text = bool(message.get('text'))
-    print(f"受信: chat={chat_id}, from={sender.get('first_name','?')}, photo={has_photo}, text={has_text}, text_val={text[:30] if text else ''}")
+    print(f"受信: chat={chat_id}, from={sender.get('first_name','?')}, photo={has_photo}, text={has_text}, text_val={text[:30] if text else ''}", flush=True)
 
     if 'photo' in message:
         handle_photo(message, chat_id)
@@ -1108,6 +1108,7 @@ def main():
     print("✅ Webhook削除完了")
 
     offset = None
+    print(f"✅ ポーリング開始 token={CONFIG['TELEGRAM_BOT_TOKEN'][:15]}", flush=True)
 
     while True:
         try:
