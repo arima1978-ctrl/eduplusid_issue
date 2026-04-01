@@ -488,7 +488,7 @@ def handle_photo(message, chat_id):
                 candidates = generate_juku_id_candidates(guessed_name)
                 extracted['塾名'] = guessed_name
 
-            send_message(chat_id, "📋 名刺の読み取りが完了しました。項目ごとに確認していきます。\n\n変更がなければ「ok」、変更する場合は正しい値を入力してください。\n/cancel でキャンセルできます。")
+            send_message(chat_id, "📋 名刺の読み取りが完了しました。項目ごとに確認していきます。\n\n変更がなければ「ok」、変更する場合は正しい値を入力してください。\n「やり直し」→ 最初からリセット\n/cancel でキャンセルできます。")
 
             # 対話型セッションを開始
             start_confirm_session(chat_id, extracted, candidates)
@@ -639,6 +639,12 @@ def handle_session_reply(chat_id, text):
     text = text.strip()
 
     try:
+        # やり直し → セッションを完全リセット
+        if text.strip() in ['やり直し', 'やりなおし', 'リセット', 'reset', 'restart']:
+            del SESSIONS[chat_id]
+            send_message(chat_id, "🔄 最初からやり直します。\n名刺の写真を送るか、/登録 コマンドで情報を入力してください。")
+            return
+
         # 全角・半角・大小文字を正規化して判定
         normalized = text.replace('Ｏ', 'O').replace('Ｋ', 'K').replace('ｏ', 'o').replace('ｋ', 'k').upper().strip()
         ok_words = ['OK', 'Y', 'YES', 'はい', 'うん', '次', 'ＯＫ', 'おｋ', 'オッケー', 'おけ']
@@ -722,6 +728,7 @@ def finalize_session(chat_id):
                     f"「確認」→ 送信内容を確認\n"
                     f"「送信」→ メール送信実行\n"
                     f"「変更 新アドレス」→ 送信先変更\n"
+                    f"「削除して再登録」→ 誤ったIDを削除して再登録\n"
                     f"「キャンセル」→ 送信しない"
                 )
                 send_message(chat_id, issue_msg)
@@ -731,6 +738,7 @@ def finalize_session(chat_id):
                     'type': 'mail',
                     'row': row,
                     'juku_name': juku_name,
+                    'juku_id': juku_id,
                 }
             else:
                 generate_error_with_candidates(chat_id, row, juku_id, juku_name, result)
@@ -816,8 +824,54 @@ def handle_mail_session_reply(chat_id, text):
         send_message(chat_id, "⚠️ 「変更 新しいメールアドレス」の形式で入力してください。\n例: 変更 new@example.com")
         return
 
+    # 「削除して再登録」系
+    if normalized in ['削除して再登録', '削除', '再登録', 'やり直し', 'やりなおし', 'リセット']:
+        row_num = session['row']
+        juku_name = session['juku_name']
+        row = get_row_data(row_num)
+        juku_id = row.get('塾ID', '')
+        if not juku_id:
+            send_message(chat_id, "⚠️ 塾IDが取得できません。スプレッドシートを確認してください。")
+            return
+        send_message(chat_id,
+            f"⚠️ 本当に「{juku_name}」（塾ID: {juku_id}）を削除して再登録しますか？\n\n"
+            f"「削除実行」→ 削除して新しいIDを入力\n"
+            f"「キャンセル」→ 戻る"
+        )
+        session['pending_delete'] = True
+        session['juku_id'] = juku_id
+        return
+
+    # 「削除実行」確認後
+    if normalized in ['削除実行'] and session.get('pending_delete'):
+        juku_id = session.get('juku_id', '')
+        juku_name = session['juku_name']
+        row_num = session['row']
+        del SESSIONS[chat_id]
+        send_message(chat_id, f"⏳ 「{juku_name}」（塾ID: {juku_id}）を削除しています...")
+
+        def do_delete_and_reset():
+            try:
+                from eduplus import delete_juku
+                ok = delete_juku(juku_id)
+                if ok:
+                    send_message(chat_id,
+                        f"✅ 削除しました。\n\n"
+                        f"新しい塾IDで再登録するには:\n"
+                        f"/retry {row_num} 新しい塾ID\n\n"
+                        f"例: /retry {row_num} abc12"
+                    )
+                else:
+                    send_message(chat_id, f"❌ 削除に失敗しました。手動で確認してください。\n塾ID: {juku_id}")
+            except Exception as e:
+                send_message(chat_id, f"❌ 削除エラー: {str(e)}")
+
+        threading.Thread(target=do_delete_and_reset).start()
+        return
+
     # 「キャンセル」系
     if normalized in ['キャンセル', 'やめる', '送信しない', 'cancel']:
+        session.pop('pending_delete', None)
         del SESSIONS[chat_id]
         send_message(chat_id, "📧 メール送信をキャンセルしました。\n後から送信する場合は /approve コマンドを使ってください。")
         return
@@ -828,6 +882,7 @@ def handle_mail_session_reply(chat_id, text):
         f"「確認」→ 送信内容を確認\n"
         f"「送信」→ メール送信実行\n"
         f"「変更 新アドレス」→ 送信先変更\n"
+        f"「削除して再登録」→ 誤ったIDを削除して再登録\n"
         f"「キャンセル」→ 送信しない"
     )
 

@@ -177,6 +177,64 @@ def register_juku(juku_id, juku_name):
         driver.quit()
 
 
+def delete_juku(juku_id):
+    """
+    登録済みの塾を削除する
+    Returns: True on success, False on failure
+    """
+    driver = create_driver()
+    try:
+        login(driver)
+
+        # 塾申込状況確認画面で検索
+        driver.get(APPLY_LIST_URL)
+        time.sleep(3)
+
+        search_field = driver.find_element(By.ID, 'jid')
+        search_field.clear()
+        search_field.send_keys(juku_id)
+        driver.find_element(By.ID, 'search_list').click()
+        time.sleep(3)
+
+        # index番号を取得
+        source = driver.page_source
+        match = re.search(r'goApplicationFromNew\((\d+)\)', source)
+        if not match:
+            return False
+
+        index_num = match.group(1)
+
+        # apply_state_new.aspx で削除ボタンをクリック
+        driver.get(f'{APPLY_STATE_URL}?index={index_num}')
+        time.sleep(3)
+
+        try:
+            del_btn = driver.find_element(By.ID, 'bj_delete')
+            driver.execute_script("arguments[0].disabled = false;", del_btn)
+            del_btn.click()
+            time.sleep(2)
+        except:
+            # 削除ボタンIDが異なる場合はJS実行
+            driver.execute_script("doDelete();")
+            time.sleep(2)
+
+        # アラート（確認ダイアログ）を承認
+        try:
+            alert = driver.switch_to.alert
+            alert.accept()
+            time.sleep(3)
+        except:
+            pass
+
+        return True
+
+    except Exception as e:
+        print(f"eduplus削除エラー: {e}")
+        return False
+    finally:
+        driver.quit()
+
+
 if __name__ == '__main__':
     if sys.platform == 'win32':
         sys.stdout.reconfigure(encoding='utf-8')
