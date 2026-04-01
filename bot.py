@@ -67,6 +67,9 @@ SESSIONS = {}
 # 処理済み update_id を保持（同一プロセス内での重複防止）
 PROCESSED_UPDATES = deque(maxlen=1000)
 
+# 処理済み message_id を保持（chat_id:message_id で重複防止）
+PROCESSED_MESSAGES = deque(maxlen=1000)
+
 # 確認する項目の順番
 CONFIRM_FIELDS = [
     ('塾名', '塾名'),
@@ -221,6 +224,15 @@ def handle_message(update):
     chat_id = message['chat']['id']
     text = message.get('text', '')
     caption = message.get('caption', '')
+
+    # message_id による重複処理防止（複数プロセス・再送対策）
+    msg_id = message.get('message_id')
+    if msg_id:
+        dedup_key = f"{chat_id}:{msg_id}"
+        if dedup_key in PROCESSED_MESSAGES:
+            logger.debug("スキップ（message_id重複）: %s", dedup_key)
+            return
+        PROCESSED_MESSAGES.append(dedup_key)
 
     # Bot自身のメッセージは無視
     sender = message.get('from', {})
@@ -592,6 +604,12 @@ def ask_next_field(chat_id):
             return
 
         step = session['step']
+
+        # 同じステップを重複して質問しない（多重呼び出し防止）
+        if session.get('_last_asked_step') == step:
+            logger.debug('重複質問スキップ: chat=%s, step=%s', chat_id, step)
+            return
+        session['_last_asked_step'] = step
 
         if step >= len(CONFIRM_FIELDS):
             # 全項目確認完了 → 登録実行
@@ -1231,7 +1249,7 @@ def main():
     logger.info("eduplus塾登録Bot 起動...")
 
     token = CONFIG['TELEGRAM_BOT_TOKEN']
-    requests.get(f"https://api.telegram.org/bot{token}/deleteWebhook")
+    requests.get(f"https://api.telegram.org/bot{token}/deleteWebhook", params={"drop_pending_updates": True})
     logger.info("Webhook削除完了")
 
     offset = None
