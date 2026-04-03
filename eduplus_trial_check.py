@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
+load_dotenv(os.path.join(SCRIPT_DIR, ".env"), override=True)
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 EDUPLUS_CHAT_ID = int(os.environ.get("EDUPLUS_CHAT_ID", "-5126783705"))
