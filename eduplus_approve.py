@@ -20,7 +20,9 @@ JST = ZoneInfo("Asia/Tokyo")
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     for i in range(0, len(text), 4000):
-        requests.post(url, json={"chat_id": EDUPLUS_CHAT_ID, "text": text[i:i+4000]})
+        resp = requests.post(url, json={"chat_id": EDUPLUS_CHAT_ID, "text": text[i:i+4000]})
+        if not resp.ok:
+            print(f"Telegram送信失敗: status={resp.status_code}, body={resp.text}")
 
 
 def login(session):
