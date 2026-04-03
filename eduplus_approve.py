@@ -148,7 +148,8 @@ def approve_juku(session, index):
     return total_count
 
 
-def main():
+def run_approve():
+    """一括承認を実行し、結果メッセージを返す。"""
     now = datetime.now(JST).strftime("%Y/%m/%d %H:%M")
     session = requests.Session()
 
@@ -180,17 +181,18 @@ def main():
             lines = [f"✅ [{now}] eduplus一括承認完了\n合計: {total}件\n"]
             for name, count in results.items():
                 lines.append(f"• {name}: {count}件")
-            msg = "\n".join(lines)
+            return "\n".join(lines)
         else:
-            msg = f"📋 [{now}] eduplus承認\n未承認なし"
-
-        send_telegram(msg)
-        print(msg)
+            return f"📋 [{now}] eduplus承認\n未承認なし"
 
     except Exception as e:
-        err_msg = f"❌ [{now}] eduplus承認エラー\n{e}"
-        send_telegram(err_msg)
-        print(err_msg)
+        return f"❌ [{now}] eduplus承認エラー\n{e}"
+
+
+def main():
+    msg = run_approve()
+    send_telegram(msg)
+    print(msg)
 
 
 if __name__ == "__main__":

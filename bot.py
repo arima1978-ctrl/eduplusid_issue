@@ -8,6 +8,7 @@ import logging.handlers
 import time
 import requests
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from collections import deque
 import re
 import os
@@ -59,7 +60,13 @@ logger.addHandler(console_handler)
 CONFIG = {
     'TELEGRAM_BOT_TOKEN': os.environ['TELEGRAM_BOT_TOKEN'],
     'GAS_URL': os.environ['GAS_URL'],
+    'EDUPLUS_CHAT_ID': int(os.environ.get('EDUPLUS_CHAT_ID', '-5126783705')),
 }
+
+JST = ZoneInfo("Asia/Tokyo")
+
+# 自動承認スケジュール（JST時刻）
+APPROVE_SCHEDULE_HOURS = [11]
 
 # 対話型セッション管理（chat_id → セッション情報）
 SESSIONS = {}
@@ -1242,6 +1249,40 @@ def acquire_lock():
     return lock_file
 
 # ====================================
+# 自動承認スケジューラ
+# ====================================
+def scheduled_approve():
+    """毎日指定時刻にeduplus一括承認を実行するバックグラウンドスレッド"""
+    from eduplus_approve import run_approve
+
+    executed_today = set()
+
+    while True:
+        try:
+            now = datetime.now(JST)
+            today = now.strftime("%Y-%m-%d")
+            hour = now.hour
+
+            if hour in APPROVE_SCHEDULE_HOURS and today not in executed_today:
+                logger.info("自動承認開始（スケジュール JST %s:00）", hour)
+                msg = run_approve()
+                chat_id = CONFIG['EDUPLUS_CHAT_ID']
+                send_message(chat_id, msg)
+                logger.info("自動承認完了: %s", msg[:80])
+                executed_today.add(today)
+
+                # 古い日付を削除（メモリリーク防止）
+                stale = [d for d in executed_today if d < today]
+                for d in stale:
+                    executed_today.discard(d)
+
+        except Exception as e:
+            logger.error("自動承認エラー: %s", e, exc_info=True)
+
+        time.sleep(30)
+
+
+# ====================================
 # メインループ
 # ====================================
 def main():
@@ -1251,6 +1292,11 @@ def main():
     token = CONFIG['TELEGRAM_BOT_TOKEN']
     requests.get(f"https://api.telegram.org/bot{token}/deleteWebhook", params={"drop_pending_updates": True})
     logger.info("Webhook削除完了")
+
+    # 自動承認スケジューラをバックグラウンドで起動
+    approve_thread = threading.Thread(target=scheduled_approve, daemon=True)
+    approve_thread.start()
+    logger.info("自動承認スケジューラ起動（毎日 JST %s時）", APPROVE_SCHEDULE_HOURS)
 
     offset = None
     logger.info("ポーリング開始 token=%s...", CONFIG['TELEGRAM_BOT_TOKEN'][:15])
