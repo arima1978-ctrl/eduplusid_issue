@@ -1299,6 +1299,8 @@ def main():
     logger.info("自動承認スケジューラ起動（毎日 JST %s時）", APPROVE_SCHEDULE_HOURS)
 
     offset = None
+    consecutive_errors = 0
+    MAX_CONSECUTIVE_ERRORS = 20
     logger.info("ポーリング開始 token=%s...", CONFIG['TELEGRAM_BOT_TOKEN'][:15])
 
     while True:
@@ -1322,11 +1324,19 @@ def main():
                     except Exception as e:
                         logger.error("メッセージ処理エラー: %s", e, exc_info=True)
                     offset = update_id + 1
+            consecutive_errors = 0
 
         except requests.exceptions.Timeout:
             continue
         except Exception as e:
-            logger.error("ポーリングエラー: %s", e, exc_info=True)
+            consecutive_errors += 1
+            logger.error(
+                "ポーリングエラー (%s/%s): %s",
+                consecutive_errors, MAX_CONSECUTIVE_ERRORS, e, exc_info=True,
+            )
+            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                logger.critical("連続エラー上限到達。systemd に再起動を委ねます。")
+                sys.exit(1)
             time.sleep(5)
 
 if __name__ == '__main__':
