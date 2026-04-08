@@ -124,7 +124,15 @@ def get_row_data(row_num):
 def update_cell(row_num, col_num, value):
     gas_api({'action': 'update_cell', 'row_num': row_num, 'col_num': col_num, 'value': value})
 
+def resolve_login_url(juku_name: str) -> str:
+    """塾名に応じたeduplusログインURLを返す。s-Live系のみ別URL。"""
+    if juku_name and 's-live' in juku_name.lower():
+        return 'https://www.eduplus.jp/s-live-juku/'
+    return 'https://www.eduplus.jp/eduplus/'
+
+
 def build_email_body(juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person):
+    login_url = resolve_login_url(juku_name)
     return f"""{juku_name}御中
 
 お世話になります。
@@ -138,7 +146,7 @@ def build_email_body(juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_
 
 ■ログインＵＲＬ
 
-https://www.eduplus.jp/eduplus/
+{login_url}
 
 
   【管理者ID】{admin_id}
