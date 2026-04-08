@@ -124,15 +124,20 @@ def get_row_data(row_num):
 def update_cell(row_num, col_num, value):
     gas_api({'action': 'update_cell', 'row_num': row_num, 'col_num': col_num, 'value': value})
 
-def resolve_login_url(juku_name: str) -> str:
-    """塾名に応じたeduplusログインURLを返す。s-Live系のみ別URL。"""
+LOGIN_URL_DEFAULT = 'https://www.eduplus.jp/eduplus/'
+LOGIN_URL_SLIVE = 'https://www.eduplus.jp/s-live-juku/'
+
+
+def suggest_login_url(juku_name: str) -> str:
+    """塾名からデフォルトのログインURL候補を返す (s-Live含むなら s-live)."""
     if juku_name and 's-live' in juku_name.lower():
-        return 'https://www.eduplus.jp/s-live-juku/'
-    return 'https://www.eduplus.jp/eduplus/'
+        return LOGIN_URL_SLIVE
+    return LOGIN_URL_DEFAULT
 
 
-def build_email_body(juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person):
-    login_url = resolve_login_url(juku_name)
+def build_email_body(juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person, login_url=None):
+    if not login_url:
+        login_url = LOGIN_URL_DEFAULT
     return f"""{juku_name}御中
 
 お世話になります。
@@ -171,9 +176,9 @@ http://www.eduplus.website/eduplus/2021teacher_manual.pdf
 """
 
 
-def send_email_via_gas(to_email, juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person):
+def send_email_via_gas(to_email, juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person, login_url=None):
     from gmail_sender import send_email
-    body = build_email_body(juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person)
+    body = build_email_body(juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person, login_url=login_url)
     subject = f'eduplus+ 管理者ID・体験用IDのご連絡【{juku_name}】'
     logger.info("メール送信開始: to=%s, 塾名=%s", to_email, juku_name)
     success, error_msg = send_email(to_email, subject, body)
@@ -818,8 +823,34 @@ def handle_mail_session_reply(chat_id, text):
         send_message(chat_id, msg)
         return
 
+    # URL選択待ち中の返信
+    if session.get('awaiting_url_choice'):
+        if normalized in ['1', '1)', '通常', 'eduplus', 'デフォルト']:
+            session['login_url'] = LOGIN_URL_DEFAULT
+        elif normalized in ['2', '2)', 's-live', 'slive', 's-Live', 'S-LIVE', 'Sライブ']:
+            session['login_url'] = LOGIN_URL_SLIVE
+        else:
+            send_message(chat_id, "⚠️ 1 (通常) または 2 (s-Live) で返信してください。")
+            return
+        session['awaiting_url_choice'] = False
+        # そのまま送信処理へフォールスルー
+        normalized = '送信'
+
     # 「送信」系
     if normalized in ['送信', '送信実行', '送る', '送って', 'はい', 'yes']:
+        # URL未選択なら先に聞く
+        if 'login_url' not in session:
+            suggested = suggest_login_url(juku_name)
+            default_label = '2 (s-Live)' if suggested == LOGIN_URL_SLIVE else '1 (通常)'
+            session['awaiting_url_choice'] = True
+            send_message(chat_id,
+                f"🔗 ログインURLを選択してください (候補: {default_label})\n\n"
+                f"1) 通常: {LOGIN_URL_DEFAULT}\n"
+                f"2) s-Live: {LOGIN_URL_SLIVE}\n\n"
+                f"「1」または「2」で返信してください。"
+            )
+            return
+
         row = get_row_data(row_num)
         email = row.get('送信先メール（変更時）') or row.get('メールアドレス')
         admin_id = row.get('管理者ID')
@@ -835,7 +866,10 @@ def handle_mail_session_reply(chat_id, text):
             send_message(chat_id, "⚠️ 管理者IDが未設定です。")
             return
 
-        success, error_msg = send_email_via_gas(email, juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person)
+        success, error_msg = send_email_via_gas(
+            email, juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person,
+            login_url=session.get('login_url'),
+        )
         if success:
             update_cell(row_num, 15, '送信済')
             send_message(chat_id, f"✅ {juku_name}（{email}）へメールを送信しました。")
