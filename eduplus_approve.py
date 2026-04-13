@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -112,44 +113,62 @@ def get_unapproved_list(session):
     return entries
 
 
-def approve_juku(session, index):
-    """指定塾の未承認を一括承認し、承認件数を返す。ページングに対応しループで全件処理。"""
+def count_pending(session, index):
+    """指定塾の未承認件数を返す（承認POSTはしない）。"""
     url = f"{BASE_URL}apply_manager_new.aspx?index={index}"
-    total_count = 0
-    max_rounds = 20  # 安全上限
+    r = session.get(url)
+    soup = BeautifulSoup(r.text, "html.parser")
 
-    for _ in range(max_rounds):
-        r = session.get(url)
-        soup = BeautifulSoup(r.text, "html.parser")
+    approve_btns = soup.find_all("input", {"value": "承認", "name": re.compile(r"btn_doApply\d+")})
+    if approve_btns:
+        return len(approve_btns)
 
-        # btn_doApply* ボタン、または「申」ステータスの行で未承認件数を判定
-        approve_btns = soup.find_all("input", {"value": "承認", "name": re.compile(r"btn_doApply\d+")})
-        pending_rows = soup.select("table#juku_apply tr")
-        pending_count = sum(1 for row in pending_rows
-                           for td in row.find_all("td")
-                           if td.get_text(strip=True) == "申")
+    pending_rows = soup.select("table#juku_apply tr")
+    return sum(1 for row in pending_rows
+               for td in row.find_all("td")
+               if td.get_text(strip=True) == "申")
 
-        count = len(approve_btns) if approve_btns else pending_count
-        if count == 0:
-            break
 
-        total_count += count
+def approve_juku(session, index):
+    """指定塾の未承認を一括承認POSTを1回だけ実行し、承認件数を返す。"""
+    url = f"{BASE_URL}apply_manager_new.aspx?index={index}"
+    r = session.get(url)
+    soup = BeautifulSoup(r.text, "html.parser")
 
-        post_data = {
-            "__VIEWSTATE": soup.find("input", {"name": "__VIEWSTATE"})["value"],
-            "__VIEWSTATEGENERATOR": soup.find("input", {"name": "__VIEWSTATEGENERATOR"})["value"],
-            "__EVENTVALIDATION": soup.find("input", {"name": "__EVENTVALIDATION"})["value"],
-            "__EVENTTARGET": "btnHiddenApplyAll",
-            "__EVENTARGUMENT": "",
-            "index": str(index),
-        }
-        session.post(url, data=post_data)
+    # 未承認件数を取得
+    approve_btns = soup.find_all("input", {"value": "承認", "name": re.compile(r"btn_doApply\d+")})
+    pending_rows = soup.select("table#juku_apply tr")
+    pending_count = sum(1 for row in pending_rows
+                        for td in row.find_all("td")
+                        if td.get_text(strip=True) == "申")
 
-    return total_count
+    count = len(approve_btns) if approve_btns else pending_count
+    if count == 0:
+        return 0
+
+    # 一括承認POSTを1回だけ実行
+    post_data = {
+        "__VIEWSTATE": soup.find("input", {"name": "__VIEWSTATE"})["value"],
+        "__VIEWSTATEGENERATOR": soup.find("input", {"name": "__VIEWSTATEGENERATOR"})["value"],
+        "__EVENTVALIDATION": soup.find("input", {"name": "__EVENTVALIDATION"})["value"],
+        "__EVENTTARGET": "btnHiddenApplyAll",
+        "__EVENTARGUMENT": "",
+        "index": str(index),
+    }
+    session.post(url, data=post_data)
+
+    return count
+
+
+RETRY_INTERVAL = 1200  # 20分（秒）
+MAX_RETRIES = 3       # 最大リトライ回数
 
 
 def run_approve():
-    """一括承認を実行し、結果メッセージを返す。"""
+    """一括承認を実行し、結果メッセージを返す。
+    1パス目: 未承認リスト取得 → 各塾に一括承認POST（1回ずつ）
+    2パス目以降: 5分待ってから再取得し、残りがあれば再承認（最大3回）
+    """
     now = datetime.now(JST).strftime("%Y/%m/%d %H:%M")
     session = requests.Session()
 
@@ -158,20 +177,35 @@ def run_approve():
 
         results = {}
         total = 0
-        max_passes = 10  # 安全上限
+        approved_indexes = set()
 
-        for pass_num in range(max_passes):
+        for pass_num in range(MAX_RETRIES + 1):
+            # 2パス目以降は5分待ってからサーバーの状態を再確認
+            if pass_num > 0:
+                time.sleep(RETRY_INTERVAL)
+                # セッション切れ対策で再ログイン
+                login(session)
+
             entries = get_unapproved_list(session)
             if not entries:
                 break
 
             found_any = False
             for entry in entries:
-                count = approve_juku(session, entry["index"])
+                idx = entry["index"]
+                if idx in approved_indexes:
+                    # 前回承認済みだが残っている → 件数だけ確認
+                    remaining = count_pending(session, idx)
+                    if remaining == 0:
+                        continue
+                    # まだ残りがあるので再承認
+
+                count = approve_juku(session, idx)
                 if count > 0:
                     name = entry["juku_name"]
                     results[name] = results.get(name, 0) + count
                     total += count
+                    approved_indexes.add(idx)
                     found_any = True
 
             if not found_any:

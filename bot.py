@@ -65,8 +65,8 @@ CONFIG = {
 
 JST = ZoneInfo("Asia/Tokyo")
 
-# 自動承認スケジュール（JST時刻）
-APPROVE_SCHEDULE_HOURS = [11]
+# 自動承認スケジュール（JST時刻） (hour, minute) のタプルで指定
+APPROVE_SCHEDULE_TIMES = [(10, 30)]
 
 # 対話型セッション管理（chat_id → セッション情報）
 SESSIONS = {}
@@ -1303,10 +1303,15 @@ def scheduled_approve():
         try:
             now = datetime.now(JST)
             today = now.strftime("%Y-%m-%d")
-            hour = now.hour
+            current_hm = (now.hour, now.minute)
 
-            if hour in APPROVE_SCHEDULE_HOURS and today not in executed_today:
-                logger.info("自動承認開始（スケジュール JST %s:00）", hour)
+            scheduled_now = any(
+                h == current_hm[0] and m <= current_hm[1] < m + 5
+                for h, m in APPROVE_SCHEDULE_TIMES
+            )
+
+            if scheduled_now and today not in executed_today:
+                logger.info("自動承認開始（スケジュール JST %02d:%02d）", current_hm[0], current_hm[1])
                 msg = run_approve()
                 chat_id = CONFIG['EDUPLUS_CHAT_ID']
                 send_message(chat_id, msg)
@@ -1338,7 +1343,8 @@ def main():
     # 自動承認スケジューラをバックグラウンドで起動
     approve_thread = threading.Thread(target=scheduled_approve, daemon=True)
     approve_thread.start()
-    logger.info("自動承認スケジューラ起動（毎日 JST %s時）", APPROVE_SCHEDULE_HOURS)
+    schedule_str = ", ".join(f"{h:02d}:{m:02d}" for h, m in APPROVE_SCHEDULE_TIMES)
+    logger.info("自動承認スケジューラ起動（毎日 JST %s）", schedule_str)
 
     offset = None
     consecutive_errors = 0
