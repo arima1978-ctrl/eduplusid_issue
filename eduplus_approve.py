@@ -113,12 +113,10 @@ def get_unapproved_list(session):
     return entries
 
 
-def count_pending(session, index):
-    """指定塾の未承認件数を返す（承認POSTはしない）。"""
-    url = f"{BASE_URL}apply_manager_new.aspx?index={index}"
-    r = session.get(url)
-    soup = BeautifulSoup(r.text, "html.parser")
-
+def _count_pending_from_soup(soup):
+    """BeautifulSoupから未承認件数を抽出する共通ヘルパー。
+    btn_doApply\\d+ ボタンが優先、無ければ「申」ステータス行を数える。
+    """
     approve_btns = soup.find_all("input", {"value": "承認", "name": re.compile(r"btn_doApply\d+")})
     if approve_btns:
         return len(approve_btns)
@@ -129,22 +127,27 @@ def count_pending(session, index):
                if td.get_text(strip=True) == "申")
 
 
+def count_pending(session, index):
+    """指定塾の未承認件数を返す（承認POSTはしない）。"""
+    url = f"{BASE_URL}apply_manager_new.aspx?index={index}"
+    r = session.get(url)
+    soup = BeautifulSoup(r.text, "html.parser")
+    return _count_pending_from_soup(soup)
+
+
 def approve_juku(session, index):
-    """指定塾の未承認を一括承認POSTを1回だけ実行し、承認件数を返す。"""
+    """指定塾の未承認を一括承認POSTを1回だけ実行し、(承認件数, 確定フラグ)を返す。
+
+    確定フラグ = POST直後の即時GETで pending件数==0 になった場合 True。
+    Trueの場合、以後は再POST禁止（重複ID防止のため）。
+    """
     url = f"{BASE_URL}apply_manager_new.aspx?index={index}"
     r = session.get(url)
     soup = BeautifulSoup(r.text, "html.parser")
 
-    # 未承認件数を取得
-    approve_btns = soup.find_all("input", {"value": "承認", "name": re.compile(r"btn_doApply\d+")})
-    pending_rows = soup.select("table#juku_apply tr")
-    pending_count = sum(1 for row in pending_rows
-                        for td in row.find_all("td")
-                        if td.get_text(strip=True) == "申")
-
-    count = len(approve_btns) if approve_btns else pending_count
-    if count == 0:
-        return 0
+    pending_before = _count_pending_from_soup(soup)
+    if pending_before == 0:
+        return 0, True  # 既に承認済み = 確定扱い
 
     # 一括承認POSTを1回だけ実行
     post_data = {
@@ -157,7 +160,14 @@ def approve_juku(session, index):
     }
     session.post(url, data=post_data)
 
-    return count
+    # POST直後に同じページを即時GETで再取得し、承認反映を検証
+    r2 = session.get(url)
+    soup2 = BeautifulSoup(r2.text, "html.parser")
+    pending_after = _count_pending_from_soup(soup2)
+
+    approved = pending_before - pending_after
+    confirmed = (pending_after == 0)
+    return approved, confirmed
 
 
 RETRY_INTERVAL = 1200  # 20分（秒）
@@ -167,7 +177,9 @@ MAX_RETRIES = 3       # 最大リトライ回数
 def run_approve():
     """一括承認を実行し、結果メッセージを返す。
     1パス目: 未承認リスト取得 → 各塾に一括承認POST（1パスあたり1回のみ）
-    2パス目以降: 20分待ってから再取得し、残りがあれば再承認（最大3回）
+            POST直後に即時GETで検証し、pending==0なら「確定承認」として記録
+    2パス目以降: 20分待って再取得し、確定承認済みの塾はSKIP（重複POST防止）
+                未確定の塾だけ再承認試行（最大3回）
     """
     now = datetime.now(JST).strftime("%Y/%m/%d %H:%M")
     session = requests.Session()
@@ -177,7 +189,7 @@ def run_approve():
 
         results = {}
         total = 0
-        approved_indexes = set()
+        confirmed_indexes = set()  # 即時検証で承認確定した塾index（再POST禁止対象）
 
         for pass_num in range(MAX_RETRIES + 1):
             # 2パス目以降は20分待ってからサーバーの状態を再確認
@@ -193,20 +205,18 @@ def run_approve():
             found_any = False
             for entry in entries:
                 idx = entry["index"]
-                if idx in approved_indexes:
-                    # 前回承認済みだが残っている → 件数だけ確認
-                    remaining = count_pending(session, idx)
-                    if remaining == 0:
-                        continue
-                    # まだ残りがあるので再承認
+                # 確定承認済みの塾はリストに残っていても絶対に再POSTしない
+                if idx in confirmed_indexes:
+                    continue
 
-                count = approve_juku(session, idx)
+                count, confirmed = approve_juku(session, idx)
                 if count > 0:
                     name = entry["juku_name"]
                     results[name] = results.get(name, 0) + count
                     total += count
-                    approved_indexes.add(idx)
                     found_any = True
+                if confirmed:
+                    confirmed_indexes.add(idx)
 
             if not found_any:
                 break
