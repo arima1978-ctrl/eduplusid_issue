@@ -166,8 +166,8 @@ MAX_RETRIES = 3       # 最大リトライ回数
 
 def run_approve():
     """一括承認を実行し、結果メッセージを返す。
-    1パス目: 未承認リスト取得 → 各塾に一括承認POST（1回ずつ）
-    2パス目以降: 5分待ってから再取得し、残りがあれば再承認（最大3回）
+    1パス目: 未承認リスト取得 → 各塾に一括承認POST（1パスあたり1回のみ）
+    2パス目以降: 20分待ってから再取得し、残りがあれば再承認（最大3回）
     """
     now = datetime.now(JST).strftime("%Y/%m/%d %H:%M")
     session = requests.Session()
@@ -180,7 +180,7 @@ def run_approve():
         approved_indexes = set()
 
         for pass_num in range(MAX_RETRIES + 1):
-            # 2パス目以降は5分待ってからサーバーの状態を再確認
+            # 2パス目以降は20分待ってからサーバーの状態を再確認
             if pass_num > 0:
                 time.sleep(RETRY_INTERVAL)
                 # セッション切れ対策で再ログイン
