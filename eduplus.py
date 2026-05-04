@@ -25,7 +25,7 @@ REGISTER_URL = 'https://www.eduplus.jp/eduplus/idreg/master/juku_register.aspx'
 APPLY_LIST_URL = 'https://www.eduplus.jp/eduplus/idreg/master/apply_list.aspx'
 APPLY_STATE_URL = 'https://www.eduplus.jp/eduplus/idreg/master/apply_state_new.aspx'
 
-MASTER_ID = os.environ.get('EDUPLUS_MASTER_ID', 'master1')
+MASTER_ID = os.environ["EDUPLUS_MASTER_ID"]
 MASTER_PW = os.environ['EDUPLUS_MASTER_PW']
 
 
