@@ -60,7 +60,7 @@ logger.addHandler(console_handler)
 CONFIG = {
     'TELEGRAM_BOT_TOKEN': os.environ['TELEGRAM_BOT_TOKEN'],
     'GAS_URL': os.environ['GAS_URL'],
-    'EDUPLUS_CHAT_ID': int(os.environ.get('EDUPLUS_CHAT_ID', '-5126783705')),
+    'EDUPLUS_CHAT_ID': int(os.environ["EDUPLUS_CHAT_ID"]),
 }
 
 JST = ZoneInfo("Asia/Tokyo")
