@@ -11,12 +11,15 @@ import random
 import string
 import os
 
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import Select
+
+MIN_JUKU_ID_LENGTH = 3
 
 load_dotenv()
 
@@ -62,11 +65,44 @@ def generate_juku_id(juku_name):
     return ''.join(random.choice(chars) for _ in range(5))
 
 
+def _find_index_for_juku_id(soup, juku_id):
+    """apply_list.aspx の検索結果から、塾ID列が完全一致する行の index を返す。
+
+    eduplus 側の jid 検索は部分一致のため、最初の goApplicationFromNew(N) を
+    そのまま使うと別塾の index を拾うことがある（重複ID事象の温床）。
+    行単位で BeautifulSoup でパースし、塾ID列の文字列が juku_id と完全一致する
+    行のみを採用する。複数一致した場合は None を返す（安全側に倒す）。
+    """
+    matches = []
+    for row in soup.select("table#apply_list tr"):
+        cells = [td.get_text(strip=True) for td in row.find_all("td")]
+        if juku_id not in cells:
+            continue
+        btn = row.find("input", {"value": "承認操作"})
+        if not btn:
+            continue
+        m = re.search(r'goApplicationFromNew\((\d+)\)', btn.get("onclick", ""))
+        if not m:
+            continue
+        matches.append(m.group(1))
+
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 def register_juku(juku_id, juku_name):
     """
     新規塾を登録してID・パスワードを取得
     Returns: dict with admin_id, admin_pw, sample_id, sample_pw or None on failure
     """
+    if len(juku_id) < MIN_JUKU_ID_LENGTH:
+        return {
+            'error': True,
+            'error_type': 'id_too_short',
+            'error_message': f'塾IDは{MIN_JUKU_ID_LENGTH}文字以上必要です（指定: "{juku_id}"）',
+        }
+
     driver = create_driver()
     try:
         login(driver)
@@ -140,19 +176,48 @@ def register_juku(juku_id, juku_name):
         driver.find_element(By.ID, 'search_list').click()
         time.sleep(3)
 
-        # 承認操作ボタンからindex番号を取得
-        source = driver.page_source
-        match = re.search(r'goApplicationFromNew\((\d+)\)', source)
-        if not match:
-            return None
-
-        index_num = match.group(1)
+        # 行単位でパースし、塾ID列が完全一致する行の index を採用する。
+        # （部分一致で別塾の goApplicationFromNew(N) を拾うのを防ぐ）
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        index_num = _find_index_for_juku_id(soup, juku_id)
+        if not index_num:
+            logger.error(
+                "apply_list で塾ID完全一致の行が見つかりません: juku_id=%s, juku_name=%s",
+                juku_id, juku_name,
+            )
+            return {
+                'error': True,
+                'error_type': 'juku_not_found',
+                'error_message': (
+                    f'登録は成功しましたが、塾ID "{juku_id}" の行が apply_list 一覧で '
+                    '完全一致しません。eduplus管理画面で手動確認してください。'
+                ),
+            }
 
         # apply_state_new.aspx でパスワードを取得
         driver.get(f'{APPLY_STATE_URL}?index={index_num}')
         time.sleep(3)
 
         source = driver.page_source
+
+        # 検証: 開いたページに juku_id と juku_name が両方含まれることを確認。
+        # 含まれない場合は別塾のページを開いている可能性があるため、誤った
+        # 管理者ID/PW を返さないよう中断する。
+        if juku_id not in source or juku_name not in source:
+            logger.error(
+                "apply_state_new ページ検証失敗: index=%s, juku_id=%s, juku_name=%s, "
+                "juku_id_in_page=%s, juku_name_in_page=%s",
+                index_num, juku_id, juku_name,
+                juku_id in source, juku_name in source,
+            )
+            return {
+                'error': True,
+                'error_type': 'page_verification_failed',
+                'error_message': (
+                    f'apply_state_new ページ（index={index_num}）が期待する塾と一致しません。'
+                    '別塾の管理者ID/PWを誤って取得する可能性があるため中断しました。'
+                ),
+            }
 
         # パスワードを抽出
         pw_match = re.search(
