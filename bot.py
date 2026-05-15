@@ -128,6 +128,49 @@ LOGIN_URL_DEFAULT = 'https://www.eduplus.jp/eduplus/'
 LOGIN_URL_SLIVE = 'https://www.eduplus.jp/s-live-juku/'
 
 
+# 日本語コマンド -> スラッシュコマンドのマッピング (長いプレフィックスを先に並べる)
+JP_COMMAND_PREFIXES: tuple[tuple[str, str], ...] = (
+    ('塾名変更', '/retry_name'),
+    ('名前変更', '/retry_name'),
+    ('送信先変更', '/mail'),
+    ('メール変更', '/mail'),
+    ('リトライ', '/retry'),
+    ('再試行', '/retry'),
+    ('再発行', '/retry'),
+    ('承認', '/approve'),
+    ('発行', '/issue'),
+    ('登録', '/register'),
+    ('キャンセル', '/cancel'),
+    ('ヘルプ', '/help'),
+)
+
+# /approve 行 [yes 同義語] の正規化用パターン
+_APPROVE_YES_PATTERN = re.compile(r'(/approve\s+\d+)\s+(実行|はい|送信実行|送信|OK|ok|Yes|YES)\s*$')
+
+
+def normalize_jp_command(text: str) -> str:
+    """日本語コマンドをスラッシュコマンドに正規化する。マッチしなければ元のテキストを返す。
+
+    例:
+        "承認 32 実行"   -> "/approve 32 yes"
+        "再試行 32 abc"  -> "/retry 32 abc"
+        "メール変更 5 a@b.c" -> "/mail 5 a@b.c"
+    """
+    if not text:
+        return text
+    stripped = text.strip()
+    if stripped.startswith('/'):
+        # 既にスラッシュコマンドなら、承認 yes 同義語のみ正規化
+        return _APPROVE_YES_PATTERN.sub(r'\1 yes', stripped)
+
+    for jp, slash in JP_COMMAND_PREFIXES:
+        if stripped.startswith(jp):
+            rest = stripped[len(jp):].strip()
+            normalized = f"{slash} {rest}".strip() if rest else slash
+            return _APPROVE_YES_PATTERN.sub(r'\1 yes', normalized)
+    return text
+
+
 def suggest_login_url(juku_name: str) -> str:
     """塾名からデフォルトのログインURL候補を返す (s-Live含むなら s-live)."""
     if juku_name and 's-live' in juku_name.lower():
@@ -274,6 +317,10 @@ def handle_message(update):
         handle_document(message, chat_id)
         return
 
+    # 日本語コマンドをスラッシュコマンドに正規化 (承認/再試行/メール変更 など)
+    if text:
+        text = normalize_jp_command(text)
+
     # 対話型セッション中の場合
     if chat_id in SESSIONS and text and not text.startswith('/'):
         session = SESSIONS[chat_id]
@@ -347,12 +394,18 @@ HP: https://example.com
 ※塾IDは英数字で指定（推奨3-5文字、任意の長さ可）
 ※登録後、自動でeduplus ID発行を実行します
 
-【コマンド一覧】
-/登録 - 新規塾登録 + ID自動発行
-/approve 行番号 - メール送信先を確認
-/approve 行番号 yes - メール送信実行
-/mail 行番号 新アドレス - 送信先を変更
-/help - このヘルプを表示"""
+【コマンド一覧（スラッシュ版 / 日本語版）】
+/登録               または  登録              - 新規塾登録 + ID自動発行
+/approve 行          または  承認 行           - メール送信先を確認
+/approve 行 yes      または  承認 行 実行      - メール送信実行 (URL選択あり)
+/retry 行 新塾ID     または  再試行 行 新塾ID  - ID重複時のリトライ
+/retry_name 行 ID 名 または  名前変更 行 ID 名 - 塾名変更してリトライ
+/mail 行 新アドレス  または  メール変更 行 新アドレス - 送信先を変更
+/cancel             または  キャンセル        - 進行中のセッションを中止
+/help               または  ヘルプ            - このヘルプを表示
+
+※「行」は行番号、「実行」は はい / 送信 / OK でも可
+※メール送信時に「1) 通常」「2) s-Live」のログインURL選択が表示されます"""
     send_message(chat_id, help_text)
 
 def generate_juku_id_candidates(juku_name):
@@ -588,7 +641,7 @@ def generate_error_with_candidates(chat_id, row_num, juku_id, juku_name, result)
         send_message(chat_id,
             f"❌ 塾ID「{juku_id}」は既に使用されています。\n\n"
             f"候補から選んでください：\n{candidate_list}\n\n"
-            f"または /retry {row_num} [任意のID] で指定"
+            f"または /retry {row_num} [任意のID]  (再試行 {row_num} [任意のID]) で指定"
         )
     else:
         # 不明なエラー
@@ -929,7 +982,7 @@ def handle_mail_session_reply(chat_id, text):
                     send_message(chat_id,
                         f"✅ 削除しました。\n\n"
                         f"新しい塾IDで再登録するには:\n"
-                        f"/retry {row_num} 新しい塾ID\n\n"
+                        f"/retry {row_num} 新しい塾ID  (または 再試行 {row_num} 新しい塾ID)\n\n"
                         f"例: /retry {row_num} abc12"
                     )
                 else:
@@ -1053,12 +1106,38 @@ def handle_approve(text, chat_id):
         return
 
     if len(parts) > 2 and parts[2] == 'yes':
-        success, error_msg = send_email_via_gas(email, juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person)
+        # URL未選択ならログインURL選択を促す (s-Live誤送防止)
+        session = SESSIONS.get(chat_id) or {}
+        login_url = session.get('login_url') if session.get('row') == row_num else None
+
+        if not login_url:
+            suggested = suggest_login_url(juku_name)
+            default_label = '2 (s-Live)' if suggested == LOGIN_URL_SLIVE else '1 (通常)'
+            SESSIONS[chat_id] = {
+                'type': 'mail',
+                'row': row_num,
+                'juku_name': juku_name,
+                'awaiting_url_choice': True,
+            }
+            send_message(chat_id,
+                f"🔗 ログインURLを選択してください (候補: {default_label})\n\n"
+                f"1) 通常: {LOGIN_URL_DEFAULT}\n"
+                f"2) s-Live: {LOGIN_URL_SLIVE}\n\n"
+                f"「1」または「2」で返信すると {juku_name} へメールを送信します。"
+            )
+            return
+
+        success, error_msg = send_email_via_gas(
+            email, juku_name, admin_id, admin_pw, sample_id, sample_pw, sales_person,
+            login_url=login_url,
+        )
         if success:
             update_cell(row_num, 15, '送信済')
             send_message(chat_id, f"✅ {juku_name}（{email}）へメールを送信しました。")
         else:
             send_message(chat_id, f"❌ メール送信に失敗しました。\n原因: {error_msg}")
+        if chat_id in SESSIONS:
+            del SESSIONS[chat_id]
     else:
         msg = (
             f"📧 メール送信確認\n\n"
@@ -1068,8 +1147,8 @@ def handle_approve(text, chat_id):
             f"サンプルID: {sample_id}\n"
             f"営業担当者: {sales_person}\n\n"
             f"この内容で送信しますか？\n"
-            f"/approve {row_num} yes → 送信実行\n"
-            f"/mail {row_num} 別アドレス → 送信先変更"
+            f"/approve {row_num} yes  (または 承認 {row_num} 実行) → 送信実行\n"
+            f"/mail {row_num} 別アドレス  (または メール変更 {row_num} 別アドレス) → 送信先変更"
         )
         send_message(chat_id, msg)
 
@@ -1119,8 +1198,8 @@ def handle_issue(text, chat_id):
                     f"サンプルID: {result['sample_id']}\n"
                     f"サンプルPW: {result['sample_pw']}\n\n"
                     f"メール送信:\n"
-                    f"/approve {row_num} → 送信先確認\n"
-                    f"/mail {row_num} 別アドレス → 送信先変更"
+                    f"/approve {row_num}  (または 承認 {row_num}) → 送信先確認\n"
+                    f"/mail {row_num} 別アドレス  (または メール変更 {row_num} 別アドレス) → 送信先変更"
                 )
                 send_message(chat_id, msg)
             else:
@@ -1173,9 +1252,9 @@ def handle_retry_name(text, chat_id):
                     f"サンプルID: {result['sample_id']}\n"
                     f"サンプルPW: {result['sample_pw']}\n\n"
                     f"📧 メール送信:\n"
-                    f"/approve {row_num} → 送信先確認\n"
-                    f"/approve {row_num} yes → 送信実行\n"
-                    f"/mail {row_num} 別アドレス → 送信先変更"
+                    f"/approve {row_num}  (または 承認 {row_num}) → 送信先確認\n"
+                    f"/approve {row_num} yes  (または 承認 {row_num} 実行) → 送信実行\n"
+                    f"/mail {row_num} 別アドレス  (または メール変更 {row_num} 別アドレス) → 送信先変更"
                 )
                 send_message(chat_id, issue_msg)
             else:
@@ -1233,9 +1312,9 @@ def handle_retry(text, chat_id):
                     f"サンプルID: {result['sample_id']}\n"
                     f"サンプルPW: {result['sample_pw']}\n\n"
                     f"📧 メール送信:\n"
-                    f"/approve {row_num} → 送信先確認\n"
-                    f"/approve {row_num} yes → 送信実行\n"
-                    f"/mail {row_num} 別アドレス → 送信先変更"
+                    f"/approve {row_num}  (または 承認 {row_num}) → 送信先確認\n"
+                    f"/approve {row_num} yes  (または 承認 {row_num} 実行) → 送信実行\n"
+                    f"/mail {row_num} 別アドレス  (または メール変更 {row_num} 別アドレス) → 送信先変更"
                 )
                 send_message(chat_id, issue_msg)
             else:
@@ -1268,7 +1347,7 @@ def handle_mail_change(text, chat_id):
     update_cell(row_num, 16, new_email)
     row = get_row_data(row_num)
     juku_name = row.get('塾名', '')
-    send_message(chat_id, f"✅ {juku_name}の送信先を変更しました。\n新しい送信先: {new_email}\n\n/approve {row_num} → メール送信を承認")
+    send_message(chat_id, f"✅ {juku_name}の送信先を変更しました。\n新しい送信先: {new_email}\n\n/approve {row_num}  (または 承認 {row_num}) → メール送信を承認")
 
 # ====================================
 # 多重起動防止
